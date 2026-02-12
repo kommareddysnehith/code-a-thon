@@ -840,9 +840,11 @@
                     <div style="color: #0288d1; font-size: 18px; font-weight: 600; margin-bottom: 20px;">Thank You! 🙏</div>
                     <div class="results-title">✅</div>
                     <div class="results-subtitle">Interview Completed!</div>
-                    <div class="results-message">
-                        Thank you for completing the Mira Interview System assessment. Your responses have been recorded and will be reviewed by our team. We appreciate your time and effort.
+                    <div class="results-message" id="finalDecisionMessage">
+                      <!-- decision will be injected here -->
                     </div>
+
+
 
                     <div class="results-details">
                         <div class="detail-row">
@@ -1015,55 +1017,79 @@
   }
 
   // Called by existing "Next Question" button
-  async function nextRound() {
-    const answerArea = document.getElementById("currentAnswer");
-    if (!answerArea || !answerArea.value.trim()) {
-      alert("Please answer the question before proceeding.");
-      return;
-    }
-
-    const roundKey = ROUND_KEYS[currentRoundIndex];
-
-    // Submit answer to backend
-    const res = await fetch(`${API_BASE}/submit-answer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: sessionId,
-        round_name: roundKey,
-        question_index: currentQuestionIndex,
-        answer: answerArea.value.trim(),
-      }),
-    });
-
-    const saveData = await res.json();
-    if (saveData.error) {
-      console.error(saveData);
-      alert("Error saving answer: " + saveData.error);
-      return;
-    }
-
-    const totalQuestions = questions.length;
-
-    // Move to next question or end of round
-    if (currentQuestionIndex < totalQuestions - 1) {
-      currentQuestionIndex += 1;
-      renderCurrentQuestion();
-    } else {
-      // Evaluate this round on backend
-      await evaluateCurrentRound();
-
-      // Move to next round or finish interview
-      if (currentRoundIndex < ROUND_KEYS.length - 1) {
-        currentRoundIndex += 1;
-        await loadQuestionsForCurrentRound();
-        renderCurrentQuestion();
-      } else {
-        await completeInterview();
-      }
-    }
+    async function nextRound() {
+  const answerArea = document.getElementById("currentAnswer");
+  if (!answerArea || !answerArea.value.trim()) {
+    alert("Please answer the question before proceeding.");
+    return;
   }
 
+  const roundKey = ROUND_KEYS[currentRoundIndex];
+
+  // 1) Submit answer to backend
+  const res = await fetch(`${API_BASE}/submit-answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      round_name: roundKey,
+      question_index: currentQuestionIndex,
+      answer: answerArea.value.trim(),
+    }),
+  });
+
+  const saveData = await res.json();
+  if (saveData.error) {
+    console.error(saveData);
+    alert("Error saving answer: " + saveData.error);
+    return;
+  }
+
+  const totalQuestions = questions.length;
+
+  // 2) If there are more questions in the same round, just go to next question
+  if (currentQuestionIndex < totalQuestions - 1) {
+    currentQuestionIndex += 1;
+    renderCurrentQuestion();
+    return;
+  }
+
+  // 3) End of this round: evaluate it
+  const evalRes = await fetch(`${API_BASE}/evaluate-round`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      round_name: roundKey,
+    }),
+  });
+
+  const evalData = await evalRes.json();
+  if (evalData.error) {
+    console.error(evalData);
+    alert("Error evaluating round: " + evalData.error);
+    return;
+  }
+
+  console.log("Round evaluated:", roundKey, evalData);
+
+  // 4) If screening failed, stop here and go to final decision
+  if (roundKey === "screening" && !evalData.passed) {
+    await completeInterview(); // will call /get-final-decision and show results
+    return;
+  }
+
+  // 5) Otherwise, continue to next round or finish after last round
+  if (currentRoundIndex < ROUND_KEYS.length - 1) {
+    currentRoundIndex += 1;
+    await loadQuestionsForCurrentRound();
+    renderCurrentQuestion();
+  } else {
+    await completeInterview();
+  }
+}
+
+    
   async function evaluateCurrentRound() {
     const roundKey = ROUND_KEYS[currentRoundIndex];
 
@@ -1086,39 +1112,46 @@
     console.log("Round evaluated:", roundKey, data);
   }
 
-  async function completeInterview() {
-    candidate.endTime = new Date();
+    async function completeInterview() {
+  candidate.endTime = new Date();
 
-    // Ask backend for final decision + detailed scores
-    const res = await fetch(`${API_BASE}/get-final-decision`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
+  // Ask backend for final decision + round results
+  const res = await fetch(`${API_BASE}/get-final-decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
 
-    const data = await res.json();
-    if (data.error) {
-      console.error(data);
-      alert("Error getting final decision: " + data.error);
-      return;
-    }
-
-    // Switch screens
-    document.getElementById("interviewScreen").classList.add("hidden");
-    document.getElementById("resultsScreen").classList.remove("hidden");
-
-    // Fill candidate info
-    document.getElementById("resultName").textContent = candidate.name;
-    document.getElementById("resultPosition").textContent =
-      candidate.position;
-    document.getElementById("resultDate").textContent =
-      new Date().toLocaleDateString();
-    document.getElementById("resultDuration").textContent =
-      calculateDuration(candidate.startTime, candidate.endTime);
-
-    // You can also show backend scores/decision in your results screen
-    console.log("Final decision:", data.final_decision, data);
+  const data = await res.json();
+  if (data.error) {
+    console.error(data);
+    alert("Error getting final decision: " + data.error);
+    return;
   }
+
+  // Switch screens
+  document.getElementById("interviewScreen").classList.add("hidden");
+  document.getElementById("resultsScreen").classList.remove("hidden");
+
+  // Candidate info
+  document.getElementById("resultName").textContent = candidate.name;
+  document.getElementById("resultPosition").textContent = candidate.position;
+  document.getElementById("resultDate").textContent =
+    new Date().toLocaleDateString();
+  document.getElementById("resultDuration").textContent =
+    calculateDuration(candidate.startTime, candidate.endTime);
+
+  // Show final decision from backend
+  const decisionEl = document.getElementById("finalDecisionMessage");
+  if (decisionEl) {
+    decisionEl.textContent =
+      data.final_decision || "Decision not available.";
+  }
+
+  console.log("Final decision:", data.final_decision, data);
+}
+
+
 
   function calculateDuration(startTime, endTime) {
     const diff = endTime - startTime;
