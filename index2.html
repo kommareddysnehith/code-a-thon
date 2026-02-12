@@ -872,223 +872,292 @@
     </div>
 
     <script>
-        // Interview Data
-        const interviewData = {
-            currentRound: 0,
-            currentQuestion: 0,
-            rounds: [
-                {
-                    name: "Screening",
-                    description: "Background and motivation assessment",
-                    questions: [
-                        {
-                            question: "What is your professional background and how did you get into this field?",
-                            type: "text"
-                        },
-                        {
-                            question: "What motivated you to apply for this position?",
-                            type: "text"
-                        },
-                        {
-                            question: "Can you describe your most significant professional achievement?",
-                            type: "text"
-                        }
-                    ]
-                },
-                {
-                    name: "Technical",
-                    description: "Role-specific knowledge evaluation",
-                    questions: [
-                        {
-                            question: "What programming languages are you most proficient in?",
-                            type: "text"
-                        },
-                        {
-                            question: "Describe your experience with system design and scalability challenges.",
-                            type: "text"
-                        },
-                        {
-                            question: "How do you approach debugging complex technical issues?",
-                            type: "text"
-                        }
-                    ]
-                },
-                {
-                    name: "Scenario",
-                    description: "Real-world problem-solving evaluation",
-                    questions: [
-                        {
-                            question: "You discover a critical bug in production affecting 10% of users. Walk us through your approach.",
-                            type: "text"
-                        },
-                        {
-                            question: "How would you handle a situation where project requirements suddenly change mid-sprint?",
-                            type: "text"
-                        },
-                        {
-                            question: "Describe how you would mentor a junior team member struggling with complex concepts.",
-                            type: "text"
-                        }
-                    ]
-                }
-            ],
-            answers: {},
-            candidate: {
-                name: "",
-                position: "",
-                startTime: null,
-                endTime: null
-            }
-        };
+  const API_BASE = "http://127.0.0.1:8000";
 
-        function startInterview() {
-            const fullName = document.getElementById("fullName").value;
-            const position = document.getElementById("position").value;
+  let sessionId = null;
+  let currentRoundIndex = 0; // 0=screening,1=technical,2=scenario
+  let questions = [];
+  let currentQuestionIndex = 0;
 
-            if (!fullName.trim() || !position) {
-                alert("Please fill in all required fields");
-                return;
-            }
+  const ROUND_KEYS = ["screening", "technical", "scenario"];
 
-            interviewData.candidate.name = fullName;
-            interviewData.candidate.position = position;
-            interviewData.candidate.startTime = new Date();
-            interviewData.currentRound = 0;
-            interviewData.currentQuestion = 0;
-            interviewData.answers = {};
+  // Candidate info + timing for your results screen
+  const candidate = {
+    name: "",
+    position: "",
+    startTime: null,
+    endTime: null,
+  };
 
-            document.getElementById("landingScreen").classList.add("hidden");
-            document.getElementById("instructionsScreen").classList.remove("hidden");
-            document.getElementById("greetingName").textContent = fullName;
-            renderQuestions();
-        }
+  // Called by your existing "Begin Interview" button (on landing screen)
+  async function startInterview() {
+    const fullName = document.getElementById("fullName").value.trim();
+    const position = document.getElementById("position").value;
 
-        function startActualInterview() {
-            const agreeCheckbox = document.getElementById("agreeCheckbox");
-            if (!agreeCheckbox.checked) {
-                alert("Please read and agree to the interview guidelines to continue.");
-                return;
-            }
-            document.getElementById("instructionsScreen").classList.add("hidden");
-            document.getElementById("interviewScreen").classList.remove("hidden");
-        }
+    if (!fullName || !position) {
+      alert("Please fill in all required fields");
+      return;
+    }
 
-        function renderQuestions() {
-            const round = interviewData.rounds[interviewData.currentRound];
-            const questionsContainer = document.getElementById("questionsContainer");
-            const currentQuestion = interviewData.currentQuestion;
-            const totalQuestions = round.questions.length;
+    candidate.name = fullName;
+    candidate.position = position;
+    candidate.startTime = new Date();
 
-            document.getElementById("roundIndicator").textContent = `Round ${interviewData.currentRound + 1} of 3 - Question ${currentQuestion + 1} of ${totalQuestions}`;
-            document.getElementById("roundTitle").textContent = round.name + " Round";
+    // Create backend session
+    const res = await fetch(`${API_BASE}/initialize-interview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidate_name: fullName }),
+    });
 
-            const progressPercentage = (((interviewData.currentRound * 3) + currentQuestion + 1) / 9) * 100;
-            document.getElementById("progressFill").style.width = progressPercentage + "%";
+    const data = await res.json();
+    if (!data.session_id) {
+      console.error(data);
+      alert("Could not start interview. Try again.");
+      return;
+    }
 
-            questionsContainer.innerHTML = "";
+    sessionId = data.session_id;
+    currentRoundIndex = 0;
+    currentQuestionIndex = 0;
 
-            const q = round.questions[currentQuestion];
-            const questionId = `round${interviewData.currentRound}_q${currentQuestion}`;
-            const section = document.createElement("div");
-            section.className = "question-container";
+    // Move to instructions screen
+    document.getElementById("landingScreen").classList.add("hidden");
+    document.getElementById("instructionsScreen").classList.remove("hidden");
+    document.getElementById("greetingName").textContent = fullName;
+  }
 
-            let savedAnswer = interviewData.answers[questionId] || "";
+  // Called by your existing "Start Interview" button on instructions screen
+  async function startActualInterview() {
+    const agreeCheckbox = document.getElementById("agreeCheckbox");
+    if (!agreeCheckbox.checked) {
+      alert("Please read and agree to the interview guidelines to continue.");
+      return;
+    }
 
-            section.innerHTML = `
-                <div class="question-number">Question ${currentQuestion + 1} of ${totalQuestions}</div>
-                <div class="question-text">${q.question}</div>
-                <textarea id="${questionId}" placeholder="Type your answer here..." class="question-input">${savedAnswer}</textarea>
-            `;
+    document.getElementById("instructionsScreen").classList.add("hidden");
+    document.getElementById("interviewScreen").classList.remove("hidden");
 
-            questionsContainer.appendChild(section);
+    // Load first round's questions from backend
+    await loadQuestionsForCurrentRound();
+    renderCurrentQuestion();
+  }
 
-            // Update button labels
-            const nextBtn = document.getElementById("nextBtn");
-            if (currentQuestion === totalQuestions - 1) {
-                nextBtn.textContent = "Next Round";
-            } else {
-                nextBtn.textContent = "Next Question";
-            }
-        }
+  async function loadQuestionsForCurrentRound() {
+    const roundKey = ROUND_KEYS[currentRoundIndex]; // screening/technical/scenario
 
-        function nextRound() {
-            // Save current answer
-            const questionId = `round${interviewData.currentRound}_q${interviewData.currentQuestion}`;
-            const textarea = document.getElementById(questionId);
-            if (textarea) {
-                interviewData.answers[questionId] = textarea.value;
-            }
+    const res = await fetch(`${API_BASE}/get-questions/${roundKey}`);
+    const data = await res.json();
 
-            // Check if current question is answered
-            if (!textarea || textarea.value.trim().length === 0) {
-                alert("Please answer the question before proceeding.");
-                return;
-            }
+    if (data.error) {
+      console.error(data);
+      alert("Error loading questions: " + data.error);
+      return;
+    }
 
-            const round = interviewData.rounds[interviewData.currentRound];
-            const totalQuestions = round.questions.length;
+    questions = data.questions || [];
+    currentQuestionIndex = 0;
+  }
 
-            // Move to next question or next round
-            if (interviewData.currentQuestion < totalQuestions - 1) {
-                interviewData.currentQuestion++;
-                renderQuestions();
-            } else if (interviewData.currentRound < 2) {
-                interviewData.currentRound++;
-                interviewData.currentQuestion = 0;
-                renderQuestions();
-            } else {
-                completeInterview();
-            }
-        }
+  function renderCurrentQuestion() {
+    const questionsContainer = document.getElementById("questionsContainer");
+    if (!questionsContainer) return;
 
-        function completeInterview() {
-            interviewData.candidate.endTime = new Date();
+    const roundName = ROUND_KEYS[currentRoundIndex];
+    const roundLabel =
+      roundName.charAt(0).toUpperCase() + roundName.slice(1);
+    const totalRounds = ROUND_KEYS.length;
+    const totalQuestions = questions.length;
 
-            // Calculate score based on answered questions
-            let answeredQuestions = 0;
-            for (let key in interviewData.answers) {
-                if (interviewData.answers[key].trim().length > 0) {
-                    answeredQuestions++;
-                }
-            }
-            const totalQuestions = 9; // 3 rounds × 3 questions
-            const score = Math.round((answeredQuestions / totalQuestions) * 100);
-            interviewData.candidate.score = score;
+    // Update header
+    document.getElementById("roundIndicator").textContent =
+      `Round ${currentRoundIndex + 1} of ${totalRounds} - Question ${
+        currentQuestionIndex + 1
+      } of ${totalQuestions}`;
+    document.getElementById("roundTitle").textContent =
+      roundLabel + " Round";
 
-            document.getElementById("interviewScreen").classList.add("hidden");
-            document.getElementById("resultsScreen").classList.remove("hidden");
+    const progressPercentage =
+      ((currentRoundIndex * totalQuestions) +
+        (currentQuestionIndex + 1)) /
+      (totalRounds * totalQuestions) *
+      100;
+    document.getElementById("progressFill").style.width =
+      progressPercentage + "%";
 
-            const duration = calculateDuration(interviewData.candidate.startTime, interviewData.candidate.endTime);
+    // Render question
+    questionsContainer.innerHTML = "";
 
-            document.getElementById("scoreValue").textContent = score;
-            document.getElementById("resultName").textContent = interviewData.candidate.name;
-            document.getElementById("resultPosition").textContent = interviewData.candidate.position;
-            document.getElementById("resultDate").textContent = new Date().toLocaleDateString();
-            document.getElementById("resultDuration").textContent = duration;
-        }
+    const qText = questions[currentQuestionIndex] || "No question.";
+    const section = document.createElement("div");
+    section.className = "question-container";
 
-        function calculateDuration(startTime, endTime) {
-            const diff = endTime - startTime;
-            const minutes = Math.floor(diff / 60000);
-            const seconds = Math.floor((diff % 60000) / 1000);
-            return `${minutes}m ${seconds}s`;
-        }
+    section.innerHTML = `
+      <div class="question-number">
+        Question ${currentQuestionIndex + 1} of ${totalQuestions}
+      </div>
+      <div class="question-text">${qText}</div>
+      <textarea id="currentAnswer" placeholder="Type your answer here..." class="question-input"></textarea>
+    `;
 
-        function goBackToLanding() {
-            if (confirm("Are you sure you want to go back? Your progress will be lost.")) {
-                document.getElementById("interviewScreen").classList.add("hidden");
-                document.getElementById("landingScreen").classList.remove("hidden");
-                document.getElementById("fullName").value = "";
-                document.getElementById("position").value = "";
-            }
-        }
+    questionsContainer.appendChild(section);
 
-        function restartInterview() {
-            document.getElementById("resultsScreen").classList.add("hidden");
-            document.getElementById("landingScreen").classList.remove("hidden");
-            document.getElementById("fullName").value = "";
-            document.getElementById("position").value = "";
-        }
-    </script>
+    // Update Next button label
+    const nextBtn = document.getElementById("nextBtn");
+    if (currentQuestionIndex === totalQuestions - 1) {
+      nextBtn.textContent =
+        currentRoundIndex === ROUND_KEYS.length - 1
+          ? "Finish Interview"
+          : "Next Round";
+    } else {
+      nextBtn.textContent = "Next Question";
+    }
+  }
+
+  // Called by existing "Next Question" button
+  async function nextRound() {
+    const answerArea = document.getElementById("currentAnswer");
+    if (!answerArea || !answerArea.value.trim()) {
+      alert("Please answer the question before proceeding.");
+      return;
+    }
+
+    const roundKey = ROUND_KEYS[currentRoundIndex];
+
+    // Submit answer to backend
+    const res = await fetch(`${API_BASE}/submit-answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sessionId,
+        round_name: roundKey,
+        question_index: currentQuestionIndex,
+        answer: answerArea.value.trim(),
+      }),
+    });
+
+    const saveData = await res.json();
+    if (saveData.error) {
+      console.error(saveData);
+      alert("Error saving answer: " + saveData.error);
+      return;
+    }
+
+    const totalQuestions = questions.length;
+
+    // Move to next question or end of round
+    if (currentQuestionIndex < totalQuestions - 1) {
+      currentQuestionIndex += 1;
+      renderCurrentQuestion();
+    } else {
+      // Evaluate this round on backend
+      await evaluateCurrentRound();
+
+      // Move to next round or finish interview
+      if (currentRoundIndex < ROUND_KEYS.length - 1) {
+        currentRoundIndex += 1;
+        await loadQuestionsForCurrentRound();
+        renderCurrentQuestion();
+      } else {
+        await completeInterview();
+      }
+    }
+  }
+
+  async function evaluateCurrentRound() {
+    const roundKey = ROUND_KEYS[currentRoundIndex];
+
+    const res = await fetch(`${API_BASE}/evaluate-round`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sessionId,
+        round_name: roundKey,
+      }),
+    });
+
+    const data = await res.json();
+    if (data.error) {
+      console.error(data);
+      alert("Error evaluating round: " + data.error);
+      return;
+    }
+
+    console.log("Round evaluated:", roundKey, data);
+  }
+
+  async function completeInterview() {
+    candidate.endTime = new Date();
+
+    // Ask backend for final decision + detailed scores
+    const res = await fetch(`${API_BASE}/get-final-decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+
+    const data = await res.json();
+    if (data.error) {
+      console.error(data);
+      alert("Error getting final decision: " + data.error);
+      return;
+    }
+
+    // Switch screens
+    document.getElementById("interviewScreen").classList.add("hidden");
+    document.getElementById("resultsScreen").classList.remove("hidden");
+
+    // Fill candidate info
+    document.getElementById("resultName").textContent = candidate.name;
+    document.getElementById("resultPosition").textContent =
+      candidate.position;
+    document.getElementById("resultDate").textContent =
+      new Date().toLocaleDateString();
+    document.getElementById("resultDuration").textContent =
+      calculateDuration(candidate.startTime, candidate.endTime);
+
+    // You can also show backend scores/decision in your results screen
+    console.log("Final decision:", data.final_decision, data);
+  }
+
+  function calculateDuration(startTime, endTime) {
+    const diff = endTime - startTime;
+    const minutes = Math.floor(diff / 60000);
+    const seconds = Math.floor((diff % 60000) / 1000);
+    return `${minutes}m ${seconds}s`;
+  }
+
+  function goBackToLanding() {
+    if (
+      confirm(
+        "Are you sure you want to go back? Your progress will be lost."
+      )
+    ) {
+      document.getElementById("interviewScreen").classList.add("hidden");
+      document.getElementById("instructionsScreen").classList.add("hidden");
+      document.getElementById("resultsScreen").classList.add("hidden");
+      document.getElementById("landingScreen").classList.remove("hidden");
+      document.getElementById("fullName").value = "";
+      document.getElementById("position").value = "";
+      sessionId = null;
+      currentRoundIndex = 0;
+      currentQuestionIndex = 0;
+      questions = [];
+    }
+  }
+
+  function restartInterview() {
+    document.getElementById("resultsScreen").classList.add("hidden");
+    document.getElementById("landingScreen").classList.remove("hidden");
+    document.getElementById("fullName").value = "";
+    document.getElementById("position").value = "";
+    sessionId = null;
+    currentRoundIndex = 0;
+    currentQuestionIndex = 0;
+    questions = [];
+  }
+
+</script>
+
 </body>
 </html>
